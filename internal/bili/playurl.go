@@ -2,35 +2,26 @@ package bili
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log/slog"
+	"net"
+	"net/url"
 	"sort"
 	"strings"
 
 	"github.com/di404/HeitingCLI/internal/audio"
 )
 
-type streamCandidate struct {
-	url    string
-	format string
-	codec  string
-	qn     int
-}
-
-var formatRank = map[string]int{"flv": 0, "ts": 1, "fmp4": 2}
-
 type playInfo struct {
 	LiveStatus  int `json:"live_status"`
 	PlayurlInfo *struct {
 		Playurl *struct {
 			Stream []struct {
-				Format []struct {
+				ProtocolName string `json:"protocol_name"`
+				Format       []struct {
 					FormatName string `json:"format_name"`
 					Codec      []struct {
-						CodecName string `json:"codec_name"`
-						CurrentQn int    `json:"current_qn"`
 						BaseURL   string `json:"base_url"`
+						IsPushing *bool  `json:"is_pushing"`
 						URLInfo   []struct {
 							Host  string `json:"host"`
 							Extra string `json:"extra"`
@@ -42,94 +33,64 @@ type playInfo struct {
 	} `json:"playurl_info"`
 }
 
-func (p *playInfo) candidates() []streamCandidate {
+// flvURLs lists the stream's FLV addresses, named CDN nodes first: bare IPs
+// and peer-assisted "mcdn" hosts are less reliable. only_audio has no effect
+// on HLS, so only FLV is usable.
+func (p *playInfo) flvURLs() []string {
 	if p.PlayurlInfo == nil || p.PlayurlInfo.Playurl == nil {
 		return nil
 	}
-	var out []streamCandidate
+	var urls []string
 	for _, stream := range p.PlayurlInfo.Playurl.Stream {
+		if stream.ProtocolName != "http_stream" {
+			continue
+		}
 		for _, format := range stream.Format {
+			if format.FormatName != "flv" {
+				continue
+			}
 			for _, codec := range format.Codec {
-				if host, extra, ok := pickHost(codec.URLInfo); ok {
-					out = append(out, streamCandidate{
-						url:    host + codec.BaseURL + extra,
-						format: format.FormatName,
-						codec:  codec.CodecName,
-						qn:     codec.CurrentQn,
-					})
+				if codec.IsPushing != nil && !*codec.IsPushing {
+					continue
+				}
+				for _, info := range codec.URLInfo {
+					urls = append(urls, info.Host+codec.BaseURL+info.Extra)
 				}
 			}
 		}
 	}
-	return out
-}
-
-// pickHost prefers CDN nodes over the unreliable peer-assisted "mcdn" hosts.
-func pickHost(hosts []struct {
-	Host  string `json:"host"`
-	Extra string `json:"extra"`
-}) (string, string, bool) {
-	if len(hosts) == 0 {
-		return "", "", false
-	}
-	for _, h := range hosts {
-		if !strings.Contains(h.Host, "mcdn") {
-			return h.Host, h.Extra, true
-		}
-	}
-	return hosts[0].Host, hosts[0].Extra, true
-}
-
-// chooseStream picks the cheapest stream: the server has no audio-only
-// variant, so the lowest video bitrate wastes the least bandwidth. FLV is one
-// long connection with the lowest delay, so it wins over HLS.
-func chooseStream(candidates []streamCandidate) (streamCandidate, bool) {
-	if len(candidates) == 0 {
-		return streamCandidate{}, false
-	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		a, b := candidates[i], candidates[j]
-		ra, oka := formatRank[a.format]
-		rb, okb := formatRank[b.format]
-		if !oka {
-			ra = len(formatRank)
-		}
-		if !okb {
-			rb = len(formatRank)
-		}
-		if ra != rb {
-			return ra < rb
-		}
-		if a.qn != b.qn {
-			return a.qn < b.qn
-		}
-		return a.codec == "avc" && b.codec != "avc"
+	sort.SliceStable(urls, func(i, j int) bool {
+		return !unreliableHost(urls[i]) && unreliableHost(urls[j])
 	})
-	return candidates[0], true
+	return urls
 }
 
-// ResolveAudio finds a playable stream for a room. If the API gives no usable
-// stream, it falls back to mpv's yt-dlp integration on the room page.
+func unreliableHost(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return true
+	}
+	return net.ParseIP(parsed.Hostname()) != nil || strings.Contains(parsed.Hostname(), "mcdn")
+}
+
+// ResolveAudio finds the room's audio-only stream. With only_audio=1 the FLV
+// stream carries no video, although its URL and metadata look unchanged. Rooms
+// without transcoding only list their stream under ptype=1.
 func (c *Client) ResolveAudio(ctx context.Context, roomID uint64) (audio.Source, error) {
-	info := new(playInfo)
-	err := c.getJSON(ctx, fmt.Sprintf(
-		"https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=%d&protocol=0,1&format=0,1,2&codec=0,1&qn=80&platform=web&ptype=8&dolby=5&panorama=1",
-		roomID), info)
-	if err == nil && info.LiveStatus != 1 {
-		return audio.Source{}, audio.ErrOffline
-	}
-	if err != nil && ctx.Err() != nil {
-		return audio.Source{}, ctx.Err()
-	}
-	var apiErr *APIError
-	if err != nil && !errors.As(err, &apiErr) {
-		return audio.Source{}, err
-	}
-	if err == nil {
-		if stream, ok := chooseStream(info.candidates()); ok {
-			return audio.Source{URL: stream.url, UserAgent: c.UserAgent(), Referer: liveReferer}, nil
+	for _, ptype := range []int{8, 1} {
+		info := new(playInfo)
+		err := c.getJSON(ctx, fmt.Sprintf(
+			"https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=%d&protocol=0,1&format=0,1,2&codec=0,1&qn=10000&platform=web&ptype=%d&only_audio=1",
+			roomID, ptype), info)
+		if err != nil {
+			return audio.Source{}, err
+		}
+		if info.LiveStatus != 1 {
+			return audio.Source{}, audio.ErrOffline
+		}
+		if urls := info.flvURLs(); len(urls) > 0 {
+			return audio.Source{URLs: urls, UserAgent: c.UserAgent(), Referer: liveReferer}, nil
 		}
 	}
-	slog.Warn("no stream from play API, using yt-dlp", "room", roomID, "err", err)
-	return audio.Source{URL: fmt.Sprintf("https://live.bilibili.com/%d", roomID), UseYTDL: true}, nil
+	return audio.Source{}, audio.ErrNoStream
 }

@@ -1,36 +1,38 @@
-// Package audio plays a live room's sound through a background mpv process.
-//
-// mpv keeps the terminal untouched (--no-terminal), discards the video track,
-// and is controlled over its JSON IPC protocol.
+// Package audio plays a live room's audio-only FLV stream inside the process:
+// HTTP, FLV demuxing, AAC decoding and output to the system's default device.
 package audio
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
-	"net"
-	"os/exec"
-	"regexp"
-	"strconv"
-	"strings"
+	"net/http"
 	"sync"
 	"time"
 )
 
-// ErrOffline is returned by a Resolver when the room is not broadcasting.
-var ErrOffline = errors.New("直播未开始")
+var (
+	// ErrOffline is returned by a Resolver when the room is not broadcasting.
+	ErrOffline = errors.New("直播未开始")
+	// ErrNoStream is returned by a Resolver when the room is live but offers
+	// no stream this player can use.
+	ErrNoStream = errors.New("没有可用的音频流")
+)
 
-// Source is a stream mpv can open.
+// fatalError stops the retry loop: reconnecting cannot help.
+type fatalError struct {
+	msg    string
+	detail string
+}
+
+func (e fatalError) Error() string { return e.msg }
+
+// Source lists the addresses of one stream, best first.
 type Source struct {
-	URL       string
+	URLs      []string
 	UserAgent string
 	Referer   string
-	// UseYTDL lets mpv resolve URL through yt-dlp.
-	UseYTDL bool
 }
 
 // Resolver finds the current stream for a room.
@@ -57,16 +59,26 @@ type Status struct {
 
 // Options are the user-configurable playback settings.
 type Options struct {
-	MPVPath      string
-	Device       string
 	CacheSeconds int
 	Volume       int
 	Muted        bool
 }
 
-// Player supervises one mpv process at a time.
+// gain follows the same cubic curve as mpv, which matches perceived loudness
+// far better than a linear scale.
+func (o Options) gain() float64 {
+	if o.Muted {
+		return 0
+	}
+	v := float64(o.Volume) / 100
+	return v * v * v
+}
+
+// Player plays one stream at a time.
 type Player struct {
 	resolve Resolver
+	open    opener
+	client  *http.Client
 	updates chan Status
 	wake    chan struct{}
 
@@ -76,13 +88,16 @@ type Player struct {
 	room   uint64
 	cancel context.CancelFunc
 	done   chan struct{}
-	conn   net.Conn
+	track  sink
+	queue  *pcmQueue
 }
 
-// NewPlayer creates a stopped player.
+// NewPlayer creates a stopped player. The audio device is opened on first use.
 func NewPlayer(resolve Resolver, opts Options) *Player {
 	return &Player{
 		resolve: resolve,
+		open:    openDevice,
+		client:  &http.Client{},
 		opts:    opts,
 		updates: make(chan Status, 1),
 		wake:    make(chan struct{}, 1),
@@ -103,10 +118,6 @@ func (p *Player) Status() Status {
 func (p *Player) Play(roomID uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.startLocked(roomID)
-}
-
-func (p *Player) startLocked(roomID uint64) {
 	if p.cancel != nil {
 		p.cancel()
 	}
@@ -135,7 +146,7 @@ func (p *Player) Stop() {
 	p.setStatusLocked(Status{State: Stopped})
 }
 
-// Close stops playback and waits for mpv to exit.
+// Close stops playback and waits for it to finish.
 func (p *Player) Close() {
 	p.Stop()
 	p.mu.Lock()
@@ -154,32 +165,15 @@ func (p *Player) Wake() {
 	}
 }
 
-// Configure applies new options, restarting mpv only if it has to.
+// Configure applies new options to the current playback.
 func (p *Player) Configure(opts Options) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	old := p.opts
 	p.opts = opts
-	if p.room != 0 && (old.MPVPath != opts.MPVPath || old.CacheSeconds != opts.CacheSeconds) {
-		p.startLocked(p.room)
-		return
+	if p.queue != nil {
+		p.queue.setTarget(opts.CacheSeconds)
+		p.track.SetVolume(opts.gain())
 	}
-	if old.Volume != opts.Volume {
-		p.sendLocked("set_property", "volume", opts.Volume)
-	}
-	if old.Muted != opts.Muted {
-		p.sendLocked("set_property", "mute", opts.Muted)
-	}
-	if old.Device != opts.Device {
-		p.sendLocked("set_property", "audio-device", deviceName(opts.Device))
-	}
-}
-
-func deviceName(device string) string {
-	if device == "" {
-		return "auto"
-	}
-	return device
 }
 
 func (p *Player) setStatusLocked(status Status) {
@@ -198,20 +192,6 @@ func (p *Player) setStatus(ctx context.Context, status Status) {
 	defer p.mu.Unlock()
 	if ctx.Err() == nil {
 		p.setStatusLocked(status)
-	}
-}
-
-func (p *Player) sendLocked(args ...any) {
-	if p.conn == nil {
-		return
-	}
-	data, err := json.Marshal(map[string]any{"command": args})
-	if err != nil {
-		return
-	}
-	_ = p.conn.SetWriteDeadline(time.Now().Add(time.Second))
-	if _, err := p.conn.Write(append(data, '\n')); err != nil {
-		slog.Warn("mpv ipc write", "err", err)
 	}
 }
 
@@ -242,6 +222,10 @@ func (p *Player) run(ctx context.Context, roomID uint64) {
 			p.setStatus(ctx, Status{State: Offline})
 			p.wait(ctx, offlinePoll)
 			continue
+		case errors.Is(err, ErrNoStream):
+			p.setStatus(ctx, Status{State: Failed, Err: err.Error()})
+			p.wait(ctx, offlinePoll)
+			continue
 		case err != nil:
 			slog.Warn("resolve stream", "room", roomID, "err", err)
 			p.setStatus(ctx, Status{State: Retrying, Err: err.Error()})
@@ -255,11 +239,13 @@ func (p *Player) run(ctx context.Context, roomID uint64) {
 		if ctx.Err() != nil {
 			return
 		}
-		if errors.Is(err, errNoMPV) {
-			p.setStatus(ctx, Status{State: Failed, Err: err.Error()})
+		var fatal fatalError
+		if errors.As(err, &fatal) {
+			slog.Error("playback failed", "room", roomID, "err", err, "detail", fatal.detail)
+			p.setStatus(ctx, Status{State: Failed, Err: fatal.msg})
 			return
 		}
-		slog.Warn("mpv exited", "room", roomID, "err", err)
+		slog.Warn("playback interrupted", "room", roomID, "err", err)
 		if time.Since(started) > stableAfter {
 			backoff = minBackoff
 		}
@@ -269,178 +255,165 @@ func (p *Player) run(ctx context.Context, roomID uint64) {
 	}
 }
 
-var errNoMPV = errors.New("未找到 mpv")
-
-func binaryName(path string) string {
-	if path == "" {
-		return "mpv"
-	}
-	return path
+// attach publishes the running output to Configure.
+func (p *Player) attach(track sink, queue *pcmQueue) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	track.SetVolume(p.opts.gain())
+	queue.setTarget(p.opts.CacheSeconds)
+	p.track, p.queue = track, queue
 }
 
-func buildArgs(src Source, opts Options) []string {
-	args := []string{
-		"--no-config",
-		"--no-terminal",
-		"--vid=no",
-		"--audio-display=no",
-		"--force-window=no",
-		"--idle=no",
-		"--network-timeout=15",
-		"--cache=yes",
-		"--cache-secs=" + strconv.Itoa(opts.CacheSeconds),
-		"--volume=" + strconv.Itoa(opts.Volume),
-		"--mute=" + yesNo(opts.Muted),
-		"--audio-device=" + deviceName(opts.Device),
-	}
-	if src.UseYTDL {
-		// mpv resolves the room page through yt-dlp; the video track is
-		// discarded, so the smallest format wastes the least bandwidth.
-		args = append(args, "--ytdl=yes", "--ytdl-format=worst")
-	} else {
-		args = append(args, "--ytdl=no", "--user-agent="+src.UserAgent, "--referrer="+src.Referer)
-	}
-	return append(args, src.URL)
-}
-
-func yesNo(b bool) string {
-	if b {
-		return "yes"
-	}
-	return "no"
+func (p *Player) detach() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.track, p.queue = nil, nil
 }
 
 func (p *Player) playOnce(ctx context.Context, src Source) error {
-	p.mu.Lock()
-	opts := p.opts
-	p.mu.Unlock()
+	ctx, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
 
-	endpoint, err := newIPCEndpoint()
+	queue := newPCMQueue(1)
+	track, err := p.open(ctx, queue)
 	if err != nil {
-		return err
-	}
-	defer endpoint.close()
-
-	args := append(endpoint.args(), buildArgs(src, opts)...)
-	cmd := exec.CommandContext(ctx, binaryName(opts.MPVPath), args...)
-	endpoint.prepare(cmd)
-	if err := cmd.Start(); err != nil {
-		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) {
-			return errNoMPV
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		return fmt.Errorf("启动 mpv 失败: %w", err)
+		return fatalError{msg: "无法打开音频设备", detail: err.Error()}
 	}
-	defer func() { _ = cmd.Wait() }()
-	endpoint.started()
+	defer track.Close()
+	p.attach(track, queue)
+	defer p.detach()
 
-	conn, err := endpoint.connect(ctx)
+	conn, flv, err := p.connect(ctx, src)
 	if err != nil {
-		_ = cmd.Process.Kill()
 		return err
 	}
 	defer conn.Close()
 
-	p.mu.Lock()
-	if ctx.Err() != nil {
-		p.mu.Unlock()
-		_ = cmd.Process.Kill()
-		return ctx.Err()
-	}
-	p.conn = conn
-	p.setStatusLocked(Status{State: Buffering})
-	p.sendLocked("observe_property", 1, "core-idle")
-	p.mu.Unlock()
+	watched := make(chan struct{})
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	go func() {
+		defer close(watched)
+		p.watch(watchCtx, ctx, queue, track, stop)
+	}()
 	defer func() {
-		p.mu.Lock()
-		if p.conn == conn {
-			p.conn = nil
-		}
-		p.mu.Unlock()
+		stopWatch()
+		<-watched
 	}()
 
-	return p.readEvents(ctx, conn)
+	err = decodeStream(flv, queue.Write)
+	if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
+		return cause
+	}
+	return err
 }
 
-type mpvEvent struct {
-	Event     string          `json:"event"`
-	Name      string          `json:"name"`
-	Data      json.RawMessage `json:"data"`
-	Reason    string          `json:"reason"`
-	FileError string          `json:"file_error"`
+// watch reports buffering changes and stops playback if the device fails.
+func (p *Player) watch(ctx, statusCtx context.Context, queue *pcmQueue, track sink, stop context.CancelCauseFunc) {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	current := Buffering
+	p.setStatus(statusCtx, Status{State: current})
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if err := track.Err(); err != nil {
+			stop(fatalError{msg: "音频设备出错", detail: err.Error()})
+			return
+		}
+		next := Buffering
+		if queue.playing() {
+			next = Playing
+		}
+		if next != current {
+			current = next
+			p.setStatus(statusCtx, Status{State: current})
+		}
+	}
 }
 
-// readEvents returns when mpv closes the connection, i.e. when it exits.
-func (p *Player) readEvents(ctx context.Context, conn net.Conn) error {
-	var endErr error
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 64*1024), 1<<20)
-	for scanner.Scan() {
-		var event mpvEvent
-		if json.Unmarshal(scanner.Bytes(), &event) != nil {
+// connect opens the first address that delivers an FLV stream.
+func (p *Player) connect(ctx context.Context, src Source) (*connection, *flvSource, error) {
+	err := error(ErrNoStream)
+	for _, url := range src.URLs {
+		var conn *connection
+		conn, err = p.dial(ctx, url, src)
+		if err != nil {
+			slog.Warn("connect stream", "err", err)
 			continue
 		}
-		switch event.Event {
-		case "property-change":
-			if event.Name == "core-idle" {
-				var idle bool
-				if json.Unmarshal(event.Data, &idle) == nil {
-					state := Buffering
-					if !idle {
-						state = Playing
-					}
-					p.setStatus(ctx, Status{State: state})
-				}
-			}
-		case "end-file":
-			if event.Reason == "error" {
-				endErr = fmt.Errorf("mpv: %s", event.FileError)
-			}
+		var flv *flvSource
+		flv, err = newFLVSource(conn)
+		if err != nil {
+			slog.Warn("open stream", "err", err)
+			conn.Close()
+			continue
 		}
+		return conn, flv, nil
 	}
-	if endErr != nil {
-		return endErr
-	}
-	return errors.New("音频流已结束")
+	return nil, nil, err
 }
 
-// Device is an output listed by mpv.
-type Device struct {
-	Name        string
-	Description string
+const stallTimeout = 10 * time.Second
+
+var errStalled = errors.New("音频流超时")
+
+// connection is an HTTP stream that fails when no data arrives for
+// stallTimeout, which a plain read would never notice on a half-dead socket.
+type connection struct {
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+	timer  *time.Timer
+	body   interface {
+		Read([]byte) (int, error)
+		Close() error
+	}
 }
 
-var devicePattern = regexp.MustCompile(`^\s*'(.+)' \((.*)\)\s*$`)
-
-// ListDevices asks mpv for the available audio outputs.
-func ListDevices(ctx context.Context, mpvPath string) ([]Device, error) {
-	output, err := exec.CommandContext(ctx, binaryName(mpvPath), "--no-config", "--audio-device=help").Output()
+func (p *Player) dial(parent context.Context, url string, src Source) (*connection, error) {
+	ctx, cancel := context.WithCancelCause(parent)
+	timer := time.AfterFunc(stallTimeout, func() { cancel(errStalled) })
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
+		timer.Stop()
+		cancel(nil)
 		return nil, err
 	}
-	return parseDevices(string(output)), nil
+	req.Header.Set("User-Agent", src.UserAgent)
+	req.Header.Set("Referer", src.Referer)
+	resp, err := p.client.Do(req)
+	if err != nil {
+		timer.Stop()
+		cancel(nil)
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		timer.Stop()
+		cancel(nil)
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return &connection{ctx: ctx, cancel: cancel, timer: timer, body: resp.Body}, nil
 }
 
-// parseDevices keeps one entry per physical device, since mpv lists each once
-// per audio backend. On macOS mpv lists coreaudio first but auto-selects
-// avfoundation, and its coreaudio output can fail or hang on open, so the
-// avfoundation entry wins.
-func parseDevices(output string) []Device {
-	var devices []Device
-	index := map[string]int{}
-	for _, line := range strings.Split(output, "\n") {
-		match := devicePattern.FindStringSubmatch(line)
-		if match == nil {
-			continue
-		}
-		device := Device{Name: match[1], Description: match[2]}
-		if i, seen := index[device.Description]; seen {
-			if strings.HasPrefix(device.Name, "avfoundation/") {
-				devices[i] = device
-			}
-			continue
-		}
-		index[device.Description] = len(devices)
-		devices = append(devices, device)
+func (c *connection) Read(b []byte) (int, error) {
+	n, err := c.body.Read(b)
+	if n > 0 {
+		c.timer.Reset(stallTimeout)
 	}
-	return devices
+	if err != nil && c.ctx.Err() != nil {
+		err = context.Cause(c.ctx)
+	}
+	return n, err
+}
+
+func (c *connection) Close() error {
+	c.timer.Stop()
+	c.cancel(nil)
+	return c.body.Close()
 }

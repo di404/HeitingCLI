@@ -6,18 +6,13 @@
 
 ## 安装
 
-需要先安装 [mpv](https://mpv.io)，用于播放音频：
-
-```bash
-brew install mpv        # macOS
-sudo apt install mpv    # Debian / Ubuntu
-```
-
-然后安装 HeitingCLI（需要 Go 1.26+）：
+需要 Go 1.26+，不依赖 mpv、ffmpeg 或 cgo：
 
 ```bash
 go install github.com/di404/HeitingCLI/cmd/heiting@latest
 ```
+
+Linux 上需要系统运行着 PulseAudio（或 PipeWire 的兼容层），或者装有 ALSA 的 `libasound2`。
 
 ## 使用
 
@@ -48,7 +43,7 @@ heiting https://live.bilibili.com/7777 # 按链接打开
 
 按 `s` 打开，修改后立即生效并自动保存。
 
-- 音频：启动时播放、音量、音频设备、缓冲秒数、mpv 路径
+- 音频：启动时播放、音量、缓冲秒数
 - 弹幕：缓存条数、彩色弹幕、舰长标识、粉丝牌名称和等级
 - 界面：显示直播标题、显示房间号
 - 网络：User-Agent
@@ -58,9 +53,11 @@ heiting https://live.bilibili.com/7777 # 按链接打开
 
 ## 音频实现
 
-B 站没有纯音频流，`only_audio` 参数实际不生效。HeitingCLI 直接从 `getRoomPlayInfo` 接口取可用的最低画质 FLV 流以节省流量，由后台的 mpv 丢弃视频轨后播放。接口取不到流时，回退到 mpv + yt-dlp 解析直播间页面，此时需要安装 yt-dlp。
+`getRoomPlayInfo` 接口带上 `only_audio=1` 后，FLV 线路返回的是真正的纯音频流，实测约 130 kbps（16 KB/s），不下载画面。这个参数不公开，只对 FLV 有效，只提供 HLS 的直播间无法播放。
 
-mpv 通过 JSON IPC 控制。断流后自动重新取流，未开播时等待开播后自动播放。macOS 和 Linux 上 mpv 通过继承的 socket 连接，主程序无论以何种方式退出，mpv 都会随之结束。
+播放在进程内完成：HTTP 拉流、解析 FLV、用 [go-aac](https://github.com/tphakala/go-aac) 解码 AAC-LC、用 [oto](https://github.com/ebitengine/oto) 输出到系统默认设备，软件内不能单独选择设备。
+
+断流后自动重新取流，未开播时等待开播后自动播放。
 
 ## 文件位置
 
@@ -74,3 +71,5 @@ mpv 通过 JSON IPC 控制。断流后自动重新取流，未开播时等待开
 ## 许可证
 
 [MIT](LICENSE)
+
+依赖 go-aac 使用 LGPL-2.1-or-later 授权，HeitingCLI 通过 Go 模块引用它，可以替换其版本后重新编译。

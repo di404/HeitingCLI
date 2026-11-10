@@ -3,6 +3,7 @@ package bili
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/andybalholm/brotli"
@@ -89,22 +90,36 @@ func TestParseRoomID(t *testing.T) {
 	}
 }
 
-func TestChooseStreamPrefersFLVLowestQuality(t *testing.T) {
-	got, ok := chooseStream([]streamCandidate{
-		{url: "hls", format: "ts", codec: "avc", qn: 80},
-		{url: "high", format: "flv", codec: "avc", qn: 10000},
-		{url: "hevc", format: "flv", codec: "hevc", qn: 250},
-		{url: "best", format: "flv", codec: "avc", qn: 250},
-	})
-	if !ok || got.url != "best" {
-		t.Fatalf("got %+v", got)
-	}
-}
-
 func TestWbiKnownVector(t *testing.T) {
 	// From the bilibili-API-collect WBI documentation.
 	mixin := mixinKey("7cd084941338484aae1ad9425b84077c", "4932caff0ff746eab6f01bf08b70ac45")
 	if mixin != "ea1db124af3c7062474693fa704f4ff8" {
 		t.Fatalf("got %s", mixin)
+	}
+}
+
+func TestFLVURLsOnlyFLVAndPreferNamedHosts(t *testing.T) {
+	info := new(playInfo)
+	raw := `{"live_status":1,"playurl_info":{"playurl":{"stream":[
+	{"protocol_name":"http_hls","format":[{"format_name":"ts","codec":[{"base_url":"/hls","url_info":[{"host":"https://cn.example.com","extra":"?a"}]}]}]},
+	{"protocol_name":"http_stream","format":[{"format_name":"flv","codec":[
+		{"base_url":"/dead","is_pushing":false,"url_info":[{"host":"https://cn.example.com","extra":"?d"}]},
+		{"base_url":"/live","url_info":[
+			{"host":"https://1.2.3.4:486","extra":"?ip"},
+			{"host":"https://x.mcdn.example.com","extra":"?m"},
+			{"host":"https://cn.example.com","extra":"?c"}
+		]}
+	]}]}
+	]}}}`
+	if err := json.Unmarshal([]byte(raw), info); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"https://cn.example.com/live?c",
+		"https://1.2.3.4:486/live?ip",
+		"https://x.mcdn.example.com/live?m",
+	}
+	if got := info.flvURLs(); !slices.Equal(got, want) {
+		t.Fatalf("got %v", got)
 	}
 }

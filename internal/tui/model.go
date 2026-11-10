@@ -113,8 +113,6 @@ func (m *Model) Close() {
 // AudioOptions extracts the player settings from the config.
 func AudioOptions(cfg *config.Config) audio.Options {
 	return audio.Options{
-		MPVPath:      cfg.MPVPath,
-		Device:       cfg.AudioDevice,
 		CacheSeconds: cfg.CacheSeconds,
 		Volume:       cfg.Volume,
 		Muted:        cfg.Muted,
@@ -340,7 +338,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case "r":
 		return m.openRooms()
 	case "s":
-		return m.openSettings()
+		m.openSettings()
+		return nil
 	}
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)

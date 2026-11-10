@@ -25,12 +25,10 @@ type Room struct {
 type Config struct {
 	RoomID uint64 `toml:"room_id"`
 
-	AutoPlay     bool   `toml:"auto_play"`
-	Volume       int    `toml:"volume"`
-	Muted        bool   `toml:"muted"`
-	AudioDevice  string `toml:"audio_device"`
-	MPVPath      string `toml:"mpv_path"`
-	CacheSeconds int    `toml:"cache_seconds"`
+	AutoPlay     bool `toml:"auto_play"`
+	Volume       int  `toml:"volume"`
+	Muted        bool `toml:"muted"`
+	CacheSeconds int  `toml:"cache_seconds"`
 
 	ChatBuffer     int  `toml:"chat_buffer"`
 	ShowRoomTitle  bool `toml:"show_room_title"`

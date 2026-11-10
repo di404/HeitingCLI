@@ -1,16 +1,12 @@
 package tui
 
 import (
-	"context"
-	"log/slog"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/di404/HeitingCLI/internal/audio"
 	"github.com/di404/HeitingCLI/internal/config"
 )
 
@@ -18,7 +14,6 @@ type settingsState struct {
 	cursor  int
 	editing bool
 	input   textinput.Model
-	devices []audio.Device
 }
 
 func newSettingsState() settingsState {
@@ -26,8 +21,6 @@ func newSettingsState() settingsState {
 	input.Prompt = ""
 	return settingsState{input: input}
 }
-
-type devicesMsg []audio.Device
 
 // settingRow is one line of the settings screen; a row without any handler is
 // a section heading.
@@ -110,9 +103,7 @@ func (m *Model) settingRows() []settingRow {
 		{label: "音频"},
 		boolRow("启动时播放", &cfg.AutoPlay, m.saveConfig),
 		intRow("音量", &cfg.Volume, 0, 100, volumeStep, applyAudio),
-		m.deviceRow(),
 		intRow("缓冲秒数", &cfg.CacheSeconds, 1, 30, 1, applyAudio),
-		textRow("mpv 路径", &cfg.MPVPath, "mpv", applyAudio),
 		{label: "弹幕"},
 		intRow("缓存条数", &cfg.ChatBuffer, 50, 2000, 50, applyBuffer),
 		boolRow("彩色弹幕", &cfg.ColorMode, applyDisplay),
@@ -129,56 +120,12 @@ func (m *Model) settingRows() []settingRow {
 	}
 }
 
-func (m *Model) deviceRow() settingRow {
-	devices := m.settings.devices
-	value := m.cfg.AudioDevice
-	index := -1
-	for i, device := range devices {
-		if device.Name == value || (value == "" && device.Name == "auto") {
-			value, index = device.Description, i
-			break
-		}
-	}
-	if value == "" {
-		value = "auto"
-	}
-	return settingRow{
-		label: "音频设备",
-		value: value,
-		adjust: func(delta int) tea.Cmd {
-			if len(devices) == 0 {
-				return nil
-			}
-			next := devices[((index+delta)%len(devices)+len(devices))%len(devices)]
-			m.cfg.AudioDevice = next.Name
-			if next.Name == "auto" {
-				m.cfg.AudioDevice = ""
-			}
-			return m.applyAudio()
-		},
-	}
-}
-
-func (m *Model) openSettings() tea.Cmd {
+func (m *Model) openSettings() {
 	m.screen = screenSettings
 	m.settings.editing = false
 	rows := m.settingRows()
 	if !rows[m.settings.cursor].selectable() {
 		m.moveSettingsCursor(rows, 1)
-	}
-	return m.loadDevices()
-}
-
-func (m *Model) loadDevices() tea.Cmd {
-	path := m.cfg.MPVPath
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		devices, err := audio.ListDevices(ctx, path)
-		if err != nil {
-			slog.Warn("list audio devices", "err", err)
-		}
-		return devicesMsg(devices)
 	}
 }
 
@@ -204,7 +151,7 @@ func (m *Model) handleSettingsKey(msg tea.KeyMsg) tea.Cmd {
 			*row.text = strings.TrimSpace(m.settings.input.Value())
 			m.settings.editing = false
 			m.settings.input.Blur()
-			return tea.Batch(row.onText(), m.loadDevices())
+			return row.onText()
 		}
 		var cmd tea.Cmd
 		m.settings.input, cmd = m.settings.input.Update(msg)
@@ -244,10 +191,6 @@ func (m *Model) handleSettingsKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) updateSettings(msg tea.Msg) (tea.Cmd, bool) {
-	if msg, ok := msg.(devicesMsg); ok {
-		m.settings.devices = msg
-		return nil, true
-	}
 	if m.screen == screenSettings && m.settings.editing {
 		var cmd tea.Cmd
 		m.settings.input, cmd = m.settings.input.Update(msg)
