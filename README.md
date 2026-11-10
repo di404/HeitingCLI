@@ -1,18 +1,13 @@
-# HeitingCLI
+# 黑听 HeitingCLI
 
-在终端里听 B 站直播：播放直播间音频、看弹幕、发弹幕，所有配置都在软件内完成。
+在终端里听 B 站直播：播放直播间音频、看弹幕、发弹幕。
 
-基于 [shr-go/bili_live_tui](https://github.com/shr-go/bili_live_tui)（MIT）开发，保留了它的弹幕协议和 WBI 签名实现，其余部分重写。
 
 ## 安装
-
-需要 Go 1.26+，不依赖 mpv、ffmpeg 或 cgo：
 
 ```bash
 go install github.com/di404/HeitingCLI/cmd/heiting@latest
 ```
-
-Linux 上需要系统运行着 PulseAudio（或 PipeWire 的兼容层），或者装有 ALSA 的 `libasound2`。
 
 ## 使用
 
@@ -72,4 +67,3 @@ heiting https://live.bilibili.com/7777 # 按链接打开
 
 [MIT](LICENSE)
 
-依赖 go-aac 使用 LGPL-2.1-or-later 授权，HeitingCLI 通过 Go 模块引用它，可以替换其版本后重新编译。
