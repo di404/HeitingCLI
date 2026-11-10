@@ -46,13 +46,6 @@ heiting https://live.bilibili.com/7777 # 按链接打开
 
 未登录时不能发送弹幕，部分用户名会被 B 站打码。
 
-## 音频实现
-
-`getRoomPlayInfo` 接口带上 `only_audio=1` 后，FLV 线路返回的是真正的纯音频流，实测约 130 kbps（16 KB/s），不下载画面。这个参数不公开，只对 FLV 有效，只提供 HLS 的直播间无法播放。
-
-播放在进程内完成：HTTP 拉流、解析 FLV、用 [go-aac](https://github.com/tphakala/go-aac) 解码 AAC-LC、用 [oto](https://github.com/ebitengine/oto) 输出到系统默认设备，软件内不能单独选择设备。
-
-断流后自动重新取流，未开播时等待开播后自动播放。
 
 ## 文件位置
 
@@ -61,7 +54,6 @@ heiting https://live.bilibili.com/7777 # 按链接打开
 | 配置和登录状态 | `~/Library/Application Support/heiting/` | `~/.config/heiting/` |
 | 日志和登录二维码 | `~/Library/Caches/heiting/` | `~/.cache/heiting/` |
 
-登录 Cookie 保存在配置目录的 `cookie` 文件中，权限为仅当前用户可读。
 
 ## 许可证
 
