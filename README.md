@@ -14,7 +14,7 @@ go install github.com/di404/HeitingCLI/cmd/heiting@latest
 ## 使用
 
 ```bash
-heiting                                # 打开上次的直播间，首次运行时添加房间
+heiting                                # 打开房间列表，选择后进入
 heiting 7777                           # 按房间号打开
 heiting https://live.bilibili.com/7777 # 按链接打开
 ```
@@ -34,13 +34,13 @@ heiting https://live.bilibili.com/7777 # 按链接打开
 
 ### 房间列表
 
-开播的房间排在最前面。`a` 添加（房间号或链接），`d` 删除，`r` 刷新，`enter` 进入。
+开播的房间排在最前面。`a` 添加（房间号或链接），`d` 删除，`r` 刷新，`n` 切换匿名模式，`enter` 进入。
 
 ### 设置
 
 按 `s` 打开，修改后立即生效并自动保存。
 
-- 音频：启动时播放、音量、缓冲秒数
+- 音频：进房时播放、音量、缓冲秒数
 - 弹幕：缓存条数、彩色弹幕、舰长标识、粉丝牌名称和等级
 - 界面：显示直播标题、显示房间号
 - 网络：User-Agent

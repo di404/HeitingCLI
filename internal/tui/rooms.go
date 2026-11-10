@@ -112,12 +112,6 @@ func (m *Model) stopRoomAdd() {
 	m.rooms.input.Blur()
 }
 
-func (m *Model) closeRooms() {
-	if m.cfg.RoomID != 0 {
-		m.screen = screenMain
-	}
-}
-
 func (m *Model) handleRoomsKey(msg tea.KeyMsg) tea.Cmd {
 	if m.rooms.adding {
 		return m.handleRoomAddKey(msg)
@@ -125,7 +119,15 @@ func (m *Model) handleRoomsKey(msg tea.KeyMsg) tea.Cmd {
 	rooms := m.sortedRooms()
 	switch msg.String() {
 	case "esc", "q":
-		m.closeRooms()
+		switch {
+		case m.session != nil:
+			m.screen = screenMain
+		case msg.String() == "q":
+			return tea.Quit
+		}
+	case "n":
+		m.cfg.Anonymous = !m.cfg.Anonymous
+		return m.applyAnonymous()
 	case "up", "k":
 		m.rooms.cursor = max(m.rooms.cursor-1, 0)
 	case "down", "j":
@@ -232,12 +234,10 @@ func (m *Model) updateRooms(msg tea.Msg) (tea.Cmd, bool) {
 		if !slices.ContainsFunc(m.cfg.Rooms, func(r config.Room) bool { return r.ID == msg.room.ID }) {
 			m.cfg.Rooms = append(m.cfg.Rooms, msg.room)
 		}
-		cmds := []tea.Cmd{m.saveConfig(), m.fetchRoomStatuses()}
-		if m.cfg.RoomID == 0 {
-			m.screen = screenMain
-			cmds = append(cmds, m.switchRoom(msg.room.ID))
+		if index := slices.IndexFunc(m.sortedRooms(), func(r config.Room) bool { return r.ID == msg.room.ID }); index >= 0 {
+			m.rooms.cursor = index
 		}
-		return tea.Batch(cmds...), true
+		return tea.Batch(m.saveConfig(), m.fetchRoomStatuses()), true
 	}
 	if m.screen == screenRooms && m.rooms.adding {
 		var cmd tea.Cmd
@@ -248,7 +248,11 @@ func (m *Model) updateRooms(msg tea.Msg) (tea.Cmd, bool) {
 }
 
 func (m *Model) roomsView() string {
-	lines := []string{titleStyle.Render("房间"), ""}
+	anonymous := dimStyle.Render("匿名 " + onOff(m.cfg.Anonymous))
+	if m.cfg.Anonymous {
+		anonymous = accentStyle.Render("匿名 " + onOff(m.cfg.Anonymous))
+	}
+	lines := []string{titleStyle.Render("房间") + "  " + anonymous, ""}
 	rooms := m.sortedRooms()
 	listHeight := m.height - 5
 	start, end := scrollWindow(m.rooms.cursor, len(rooms), listHeight)
@@ -264,7 +268,10 @@ func (m *Model) roomsView() string {
 	case m.rooms.busy:
 		last = dimStyle.Render("添加中")
 	}
-	hint := "enter 进入  a 添加  d 删除  r 刷新  esc 返回"
+	hint := "enter 进入  a 添加  d 删除  r 刷新  n 匿名  esc 返回"
+	if m.session == nil {
+		hint = "enter 进入  a 添加  d 删除  r 刷新  n 匿名  q 退出"
+	}
 	if m.rooms.adding {
 		hint = "enter 确认  esc 取消"
 	}

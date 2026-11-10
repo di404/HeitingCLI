@@ -144,7 +144,7 @@ func waitPlayer(p *audio.Player) tea.Cmd {
 	return func() tea.Msg { return playerMsg(<-p.Updates()) }
 }
 
-// Init asks a first-time user to log in, or goes straight to the room.
+// Init asks a first-time user to log in, or moves on to choosing a room.
 func (m *Model) Init() tea.Cmd {
 	background := tea.Batch(waitPlayer(m.player), textinput.Blink)
 	if !m.cfg.Anonymous && config.LoadCookie() == "" && !m.cfg.LoginPrompted {
@@ -154,18 +154,18 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(background, m.enterApp())
 }
 
-// enterApp opens the initial room, or the room list when there is none yet.
+// enterApp opens the room named on the command line. Otherwise it shows the room
+// list: joining a room is visible to others, so it needs an explicit choice.
 func (m *Model) enterApp() tea.Cmd {
-	room := m.initialRoom
-	if room == 0 {
-		room = m.cfg.RoomID
-	}
-	if room != 0 {
+	if m.initialRoom != 0 {
 		m.screen = screenMain
-		return m.switchRoom(room)
+		return m.switchRoom(m.initialRoom)
 	}
-	m.screen = screenRooms
-	return m.startRoomAdd()
+	cmd := m.openRooms()
+	if len(m.cfg.Rooms) == 0 {
+		return tea.Batch(cmd, m.startRoomAdd())
+	}
+	return cmd
 }
 
 // switchRoom connects to a room and starts its audio if the user is listening.
