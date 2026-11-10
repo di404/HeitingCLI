@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/andybalholm/brotli"
@@ -121,5 +122,21 @@ func TestFLVURLsOnlyFLVAndPreferNamedHosts(t *testing.T) {
 	}
 	if got := info.flvURLs(); !slices.Equal(got, want) {
 		t.Fatalf("got %v", got)
+	}
+}
+
+func TestRenderQRAddsQuietZoneAndFollowsTheme(t *testing.T) {
+	modules := [][]bool{{true, false}, {false, true}}
+	dark := strings.Split(renderQR(modules, true), "\n")
+	if len(dark) != 3 || len([]rune(dark[0])) != 6 {
+		t.Fatalf("got %q", dark)
+	}
+	// A dark module on a dark terminal is the unpainted background.
+	if dark[1] != "██▄▀██" {
+		t.Fatalf("got %q", dark[1])
+	}
+	light := strings.Split(renderQR(modules, false), "\n")
+	if light[1] != "  ▀▄  " {
+		t.Fatalf("got %q", light[1])
 	}
 }

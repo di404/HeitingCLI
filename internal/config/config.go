@@ -30,6 +30,9 @@ type Config struct {
 	Muted        bool `toml:"muted"`
 	CacheSeconds int  `toml:"cache_seconds"`
 
+	// LoginPrompted records that the first-run login prompt has been answered.
+	LoginPrompted bool `toml:"login_prompted"`
+
 	ChatBuffer     int  `toml:"chat_buffer"`
 	ShowRoomTitle  bool `toml:"show_room_title"`
 	ShowRoomNumber bool `toml:"show_room_number"`

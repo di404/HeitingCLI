@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"path/filepath"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,6 +19,7 @@ type loginState struct {
 	status     bili.QRStatus
 	err        string
 	pngPath    string
+	firstRun   bool
 }
 
 type (
@@ -53,11 +53,11 @@ func (m *Model) requestQR() tea.Cmd {
 	m.login.status = bili.QRNotScanned
 	m.login.pngPath = filepath.Join(dir, "login.png")
 
-	generation, png, inverse, client := m.login.generation, m.login.pngPath, !m.darkTheme, m.client
+	generation, png, dark, client := m.login.generation, m.login.pngPath, m.darkTheme, m.client
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		code, err := client.GenerateQR(ctx, inverse, png)
+		code, err := client.GenerateQR(ctx, dark, png)
 		return qrReadyMsg{generation: generation, code: code, err: err}
 	}
 }
@@ -83,10 +83,30 @@ func (m *Model) handleLoginKey(msg tea.KeyMsg) tea.Cmd {
 	case "esc", "q":
 		m.login.generation++ // Discards anything still in flight.
 		m.screen = screenSettings
+		if m.login.firstRun {
+			m.login.firstRun = false
+			m.screen = screenLoginPrompt
+		}
 	case "r":
 		return m.requestQR()
 	}
 	return nil
+}
+
+func (m *Model) handleLoginPromptKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "enter":
+		m.login.firstRun = true
+		return m.startLogin()
+	case "esc":
+		return m.finishLoginPrompt()
+	}
+	return nil
+}
+
+func (m *Model) finishLoginPrompt() tea.Cmd {
+	m.cfg.LoginPrompted = true
+	return tea.Batch(m.saveConfig(), m.enterApp())
 }
 
 func (m *Model) updateLogin(msg tea.Msg) (tea.Cmd, bool) {
@@ -131,15 +151,20 @@ func (m *Model) finishLogin(cookies string) tea.Cmd {
 	m.login.generation++
 	m.login.code = nil
 	m.client.SetCookies(cookies)
-	m.screen = screenSettings
 	var flash tea.Cmd
 	if err := config.SaveCookie(cookies); err != nil {
 		flash = m.flash("保存登录状态失败: " + err.Error())
 	}
+	if m.login.firstRun {
+		m.login.firstRun = false
+		return tea.Batch(flash, m.finishLoginPrompt())
+	}
+	m.screen = screenSettings
 	return tea.Batch(flash, m.reconnectAccount())
 }
 
 func (m *Model) loginView() string {
+	const hint = "r 刷新  esc 返回"
 	var body string
 	switch {
 	case m.login.err != "":
@@ -151,12 +176,26 @@ func (m *Model) loginView() string {
 		if m.login.status == bili.QRScanned {
 			tip = "在手机上确认登录"
 		}
-		parts := []string{tip, strings.TrimRight(m.login.code.Text, "\n")}
-		if lipgloss.Height(m.login.code.Text)+2 > m.height {
-			parts = []string{tip, m.login.pngPath}
+		code := m.login.code.Text
+		rows, columns := lipgloss.Height(code), lipgloss.Width(code)
+		switch {
+		case rows+2 <= m.height:
+			body = lipgloss.JoinVertical(lipgloss.Center, tip, code)
+		case rows <= m.height && columns+2+lipgloss.Width(hint) <= m.width:
+			// No row to spare: the code takes the full height.
+			side := lipgloss.JoinVertical(lipgloss.Left, tip, "", m.hintView(hint))
+			return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+				lipgloss.JoinHorizontal(lipgloss.Center, code, "  ", side))
+		default:
+			body = lipgloss.JoinVertical(lipgloss.Center, tip, "窗口太小，放大窗口显示二维码，或打开图片：", m.login.pngPath)
 		}
-		body = lipgloss.JoinVertical(lipgloss.Center, parts...)
 	}
 	return lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, body) +
-		"\n" + m.hintView("r 刷新  esc 返回")
+		"\n" + m.hintView(hint)
+}
+
+func (m *Model) loginPromptView() string {
+	body := lipgloss.JoinVertical(lipgloss.Center, titleStyle.Render("登录哔哩哔哩"), "登录后可以发送弹幕、查看完整用户名")
+	return lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, body) +
+		"\n" + m.hintView("enter 扫码登录  esc 稍后再登录")
 }

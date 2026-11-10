@@ -25,6 +25,7 @@ const (
 	screenRooms
 	screenSettings
 	screenLogin
+	screenLoginPrompt
 )
 
 const (
@@ -143,20 +144,28 @@ func waitPlayer(p *audio.Player) tea.Cmd {
 	return func() tea.Msg { return playerMsg(<-p.Updates()) }
 }
 
-// Init opens the initial room, or the room list when there is none yet.
+// Init asks a first-time user to log in, or goes straight to the room.
 func (m *Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{waitPlayer(m.player), textinput.Blink}
+	background := tea.Batch(waitPlayer(m.player), textinput.Blink)
+	if config.LoadCookie() == "" && !m.cfg.LoginPrompted {
+		m.screen = screenLoginPrompt
+		return background
+	}
+	return tea.Batch(background, m.enterApp())
+}
+
+// enterApp opens the initial room, or the room list when there is none yet.
+func (m *Model) enterApp() tea.Cmd {
 	room := m.initialRoom
 	if room == 0 {
 		room = m.cfg.RoomID
 	}
 	if room != 0 {
-		cmds = append(cmds, m.switchRoom(room))
-	} else {
-		m.screen = screenRooms
-		cmds = append(cmds, m.startRoomAdd())
+		m.screen = screenMain
+		return m.switchRoom(room)
 	}
-	return tea.Batch(cmds...)
+	m.screen = screenRooms
+	return m.startRoomAdd()
 }
 
 // switchRoom connects to a room and starts its audio if the user is listening.
@@ -309,6 +318,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleSettingsKey(msg)
 	case screenLogin:
 		return m.handleLoginKey(msg)
+	case screenLoginPrompt:
+		return m.handleLoginPromptKey(msg)
 	}
 	if m.inputFocus {
 		return m.handleInputKey(msg)
@@ -453,6 +464,8 @@ func (m *Model) View() string {
 		return m.settingsView()
 	case screenLogin:
 		return m.loginView()
+	case screenLoginPrompt:
+		return m.loginPromptView()
 	}
 	return m.mainView()
 }
