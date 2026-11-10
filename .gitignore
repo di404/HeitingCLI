@@ -1,0 +1,7 @@
+/heiting
+/dist/
+*.log
+cookie
+COOKIE.DAT
+login.png
+.DS_Store
