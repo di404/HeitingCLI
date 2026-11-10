@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/di404/HeitingCLI/internal/audio"
 	"github.com/di404/HeitingCLI/internal/bili"
 	"github.com/di404/HeitingCLI/internal/config"
+	"github.com/di404/HeitingCLI/internal/ime"
 	"github.com/di404/HeitingCLI/internal/tui"
 )
 
@@ -54,7 +57,21 @@ func run() error {
 	model := tui.New(cfg, client, player, initialRoom)
 	defer model.Close()
 
-	_, err = tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	model.IMEControl = ime.SetEnabled
+	defer ime.SetEnabled(true)
+
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithReportFocus())
+
+	// Closing the terminal window sends SIGHUP, which Bubble Tea does not handle.
+	// Quitting normally is what puts the input method back.
+	hangup := make(chan os.Signal, 1)
+	signal.Notify(hangup, syscall.SIGHUP)
+	go func() {
+		<-hangup
+		program.Quit()
+	}()
+
+	_, err = program.Run()
 	return err
 }
 

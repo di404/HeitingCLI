@@ -74,6 +74,11 @@ type Model struct {
 	rooms    roomsState
 	settings settingsState
 	login    loginState
+
+	// IMEControl, if set, turns the system input method on or off.
+	IMEControl  func(enabled bool)
+	asciiForced bool
+	termBlurred bool
 }
 
 // New builds the interface. initialRoom, if non-zero, overrides the saved room.
@@ -217,57 +222,83 @@ func (m *Model) flash(text string) tea.Cmd {
 
 // Update routes messages.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	cmd := m.update(msg)
+	m.syncIME()
+	return m, cmd
+}
+
+// syncIME leaves the input method on only where Chinese can be typed. Everywhere
+// else a key is a shortcut, or part of a room number or User-Agent. It also goes
+// back on when the terminal loses focus, because the input source is system-wide.
+func (m *Model) syncIME() {
+	if m.IMEControl == nil {
+		return
+	}
+	forceASCII := !m.termBlurred && !(m.screen == screenMain && m.inputFocus)
+	if forceASCII != m.asciiForced {
+		m.asciiForced = forceASCII
+		m.IMEControl(!forceASCII)
+	}
+}
+
+func (m *Model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case tea.FocusMsg:
+		m.termBlurred = false
+		return nil
+	case tea.BlurMsg:
+		m.termBlurred = true
+		return nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
-		return m, nil
+		return nil
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
-			return m, tea.Quit
+			return tea.Quit
 		}
-		return m, m.handleKey(msg)
+		return m.handleKey(msg)
 	case tea.MouseMsg:
 		if m.screen == screenMain {
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
 			m.follow = m.viewport.AtBottom()
-			return m, cmd
+			return cmd
 		}
-		return m, nil
+		return nil
 	case statusClear:
 		if msg.id == m.statusID {
 			m.status = ""
 		}
-		return m, nil
+		return nil
 	case playerMsg:
 		m.audioStatus = audio.Status(msg)
-		return m, waitPlayer(m.player)
+		return waitPlayer(m.player)
 	case sessionMsg:
 		if msg.session != m.session {
-			return m, nil
+			return nil
 		}
-		return m, tea.Batch(waitSession(msg.session), m.handleSessionEvent(msg.event))
+		return tea.Batch(waitSession(msg.session), m.handleSessionEvent(msg.event))
 	case danmuSentMsg:
 		if msg.err != nil {
-			return m, m.flash("发送失败: " + msg.err.Error())
+			return m.flash("发送失败: " + msg.err.Error())
 		}
-		return m, nil
+		return nil
 	}
 
 	if cmd, handled := m.updateRooms(msg); handled {
-		return m, cmd
+		return cmd
 	}
 	if cmd, handled := m.updateSettings(msg); handled {
-		return m, cmd
+		return cmd
 	}
 	if cmd, handled := m.updateLogin(msg); handled {
-		return m, cmd
+		return cmd
 	}
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	return m, cmd
+	return cmd
 }
 
 func (m *Model) handleSessionEvent(event any) tea.Cmd {
