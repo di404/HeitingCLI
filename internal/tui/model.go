@@ -52,6 +52,7 @@ type Model struct {
 
 	session      *bili.Session
 	room         *bili.RoomInfo
+	online       uint64
 	user         *bili.User
 	property     *bili.DanmuProperty
 	connected    bool
@@ -171,6 +172,7 @@ func (m *Model) enterApp() tea.Cmd {
 // switchRoom connects to a room and starts its audio if the user is listening.
 func (m *Model) switchRoom(roomID uint64) tea.Cmd {
 	m.room, m.user, m.property = nil, nil, nil
+	m.online = 0
 	m.connected, m.sessionError = false, ""
 	m.newRoom = true
 	m.danmu = nil
@@ -302,6 +304,8 @@ func (m *Model) handleSessionEvent(event any) tea.Cmd {
 		if m.room != nil {
 			m.room.LiveStatus = 0
 		}
+	case bili.EventOnline:
+		m.online = event.Count
 	case bili.EventTitle:
 		if m.room != nil {
 			m.room.Title = event.Title
@@ -494,6 +498,12 @@ func (m *Model) hintView(hint string) string {
 
 func (m *Model) headerView() string {
 	right := m.audioView()
+	if m.online > 0 {
+		right = dimStyle.Render("在线 "+formatCount(m.online)) + "  " + right
+	}
+	if m.cfg.Anonymous {
+		right = accentStyle.Render("匿名") + "  " + right
+	}
 	if !m.connected && m.sessionError != "" {
 		right = redStyle.Render("弹幕重连中") + "  " + right
 	}
@@ -545,4 +555,11 @@ func (m *Model) audioView() string {
 		return state + "  " + accentStyle.Render("静音")
 	}
 	return state + "  " + fmt.Sprintf("音量 %d", m.cfg.Volume)
+}
+
+func formatCount(n uint64) string {
+	if n < 10000 {
+		return fmt.Sprintf("%d", n)
+	}
+	return fmt.Sprintf("%.1f万", float64(n)/10000)
 }

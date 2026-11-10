@@ -54,6 +54,8 @@ type (
 	EventLive         struct{}
 	EventPreparing    struct{}
 	EventTitle        struct{ Title string }
+	// EventOnline carries the number of viewers currently in the room.
+	EventOnline struct{ Count uint64 }
 )
 
 // Session keeps a danmaku connection open for one room, reconnecting until
@@ -384,6 +386,13 @@ func parseCommand(body []byte) any {
 		return EventLive{}
 	case "PREPARING":
 		return EventPreparing{}
+	case "ONLINE_RANK_COUNT":
+		var data struct {
+			OnlineCount uint64 `json:"online_count"`
+		}
+		if json.Unmarshal(msg.Data, &data) == nil && data.OnlineCount > 0 {
+			return EventOnline{Count: data.OnlineCount}
+		}
 	case "ROOM_CHANGE":
 		var data struct {
 			Title string `json:"title"`
