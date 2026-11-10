@@ -147,7 +147,7 @@ func waitPlayer(p *audio.Player) tea.Cmd {
 // Init asks a first-time user to log in, or goes straight to the room.
 func (m *Model) Init() tea.Cmd {
 	background := tea.Batch(waitPlayer(m.player), textinput.Blink)
-	if config.LoadCookie() == "" && !m.cfg.LoginPrompted {
+	if !m.cfg.Anonymous && config.LoadCookie() == "" && !m.cfg.LoginPrompted {
 		m.screen = screenLoginPrompt
 		return background
 	}
@@ -368,6 +368,9 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 		text := strings.TrimSpace(m.input.Value())
 		if text == "" {
 			return nil
+		}
+		if m.cfg.Anonymous {
+			return m.flash("匿名模式下不能发送弹幕")
 		}
 		if m.user == nil || m.room == nil {
 			return m.flash("登录后才能发送弹幕")

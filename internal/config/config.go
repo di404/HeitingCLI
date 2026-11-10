@@ -32,6 +32,8 @@ type Config struct {
 
 	// LoginPrompted records that the first-run login prompt has been answered.
 	LoginPrompted bool `toml:"login_prompted"`
+	// Anonymous connects as a guest while keeping the saved login on disk.
+	Anonymous bool `toml:"anonymous"`
 
 	ChatBuffer     int  `toml:"chat_buffer"`
 	ShowRoomTitle  bool `toml:"show_room_title"`

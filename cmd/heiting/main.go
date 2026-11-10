@@ -43,7 +43,11 @@ func run() error {
 		defer closeLog()
 	}
 
-	client := bili.New(cfg.UserAgent, config.LoadCookie())
+	cookies := ""
+	if !cfg.Anonymous {
+		cookies = config.LoadCookie()
+	}
+	client := bili.New(cfg.UserAgent, cookies)
 	player := audio.NewPlayer(client.ResolveAudio, tui.AudioOptions(cfg))
 	defer player.Close()
 

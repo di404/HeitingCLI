@@ -99,7 +99,7 @@ func (m *Model) settingRows() []settingRow {
 		account = settingRow{label: "退出登录", value: m.user.Name, action: m.logout}
 	}
 
-	return []settingRow{
+	rows := []settingRow{
 		{label: "音频"},
 		boolRow("启动时播放", &cfg.AutoPlay, m.saveConfig),
 		intRow("音量", &cfg.Volume, 0, 100, volumeStep, applyAudio),
@@ -116,8 +116,12 @@ func (m *Model) settingRows() []settingRow {
 		{label: "网络"},
 		textRow("User-Agent", &cfg.UserAgent, "默认", applyUA),
 		{label: "账号"},
-		account,
+		boolRow("匿名模式", &cfg.Anonymous, m.applyAnonymous),
 	}
+	if !cfg.Anonymous {
+		rows = append(rows, account)
+	}
+	return rows
 }
 
 func (m *Model) openSettings() {
@@ -237,6 +241,19 @@ func (m *Model) logout() tea.Cmd {
 	}
 	m.client.ClearLogin()
 	return m.reconnectAccount()
+}
+
+// applyAnonymous swaps the client's identity and reconnects with it. Audio is
+// restarted too, because its stream was requested with the previous identity.
+func (m *Model) applyAnonymous() tea.Cmd {
+	m.client.ClearLogin()
+	if !m.cfg.Anonymous {
+		m.client.SetCookies(config.LoadCookie())
+	}
+	if m.listening && m.cfg.RoomID != 0 {
+		m.player.Play(m.cfg.RoomID)
+	}
+	return tea.Batch(m.saveConfig(), m.reconnectAccount())
 }
 
 // reconnectAccount reopens the danmaku session after the login changes.
