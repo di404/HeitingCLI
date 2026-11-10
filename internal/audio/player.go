@@ -171,9 +171,17 @@ func (p *Player) Configure(opts Options) {
 	defer p.mu.Unlock()
 	p.opts = opts
 	if p.queue != nil {
-		p.queue.setTarget(opts.CacheSeconds)
-		p.track.SetVolume(opts.gain())
+		p.applyOptionsLocked()
 	}
+}
+
+// applyOptionsLocked leaves attenuation to the device, whose mixer has no
+// limiter, and amplifies in the queue, where peaks can still be contained.
+func (p *Player) applyOptionsLocked() {
+	gain := p.opts.gain()
+	p.track.SetVolume(min(gain, 1))
+	p.queue.setBoost(max(gain, 1))
+	p.queue.setTarget(p.opts.CacheSeconds)
 }
 
 func (p *Player) setStatusLocked(status Status) {
@@ -259,9 +267,8 @@ func (p *Player) run(ctx context.Context, roomID uint64) {
 func (p *Player) attach(track sink, queue *pcmQueue) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	track.SetVolume(p.opts.gain())
-	queue.setTarget(p.opts.CacheSeconds)
 	p.track, p.queue = track, queue
+	p.applyOptionsLocked()
 }
 
 func (p *Player) detach() {

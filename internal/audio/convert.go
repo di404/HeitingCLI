@@ -69,6 +69,36 @@ func appendFrame(dst []byte, left, right int16) []byte {
 	return binary.LittleEndian.AppendUint16(dst, uint16(right))
 }
 
+// limiterKnee is the level above which amplified samples are rounded off.
+const limiterKnee = 0.8
+
+// limit is linear up to the knee, then bends smoothly towards full scale
+// without reaching it, so amplified peaks do not clip.
+func limit(x float64) float64 {
+	level := math.Abs(x)
+	if level <= limiterKnee {
+		return x
+	}
+	over := (level - limiterKnee) / (1 - limiterKnee)
+	return math.Copysign(limiterKnee+(1-limiterKnee)*over/(1+over), x)
+}
+
+// amplify applies a gain ramping from one value to another across the frames
+// of pcm, so that a volume change does not click.
+func amplify(pcm []byte, from, to float64) {
+	if from == 1 && to == 1 {
+		return
+	}
+	frames := len(pcm) / outputBytesPerFrame
+	for i := range len(pcm) / 2 {
+		frame := i/2 + 1
+		gain := from + (to-from)*float64(frame)/float64(frames)
+		sample := int16(binary.LittleEndian.Uint16(pcm[i*2:]))
+		scaled := limit(float64(sample) / (math.MaxInt16 + 1) * gain)
+		binary.LittleEndian.PutUint16(pcm[i*2:], uint16(int16(math.Round(scaled*(math.MaxInt16+1)))))
+	}
+}
+
 func hermite(a, b, c, d int16, t float64) int16 {
 	p0, p1, p2, p3 := float64(a), float64(b), float64(c), float64(d)
 	v := p1 + 0.5*t*(p2-p0+t*(2*p0-5*p1+4*p2-p3+t*(3*(p1-p2)+p3-p0)))

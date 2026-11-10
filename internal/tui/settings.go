@@ -102,7 +102,7 @@ func (m *Model) settingRows() []settingRow {
 	rows := []settingRow{
 		{label: "音频"},
 		boolRow("启动时播放", &cfg.AutoPlay, m.saveConfig),
-		intRow("音量", &cfg.Volume, 0, 100, volumeStep, applyAudio),
+		intRow("音量", &cfg.Volume, 0, config.MaxVolume, volumeStep, applyAudio),
 		intRow("缓冲秒数", &cfg.CacheSeconds, 1, 30, 1, applyAudio),
 		{label: "弹幕"},
 		intRow("缓存条数", &cfg.ChatBuffer, 50, 2000, 50, applyBuffer),

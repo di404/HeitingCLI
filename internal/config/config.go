@@ -15,6 +15,9 @@ import (
 
 const appName = "heiting"
 
+// MaxVolume is the top of the volume scale; above 100 the audio is amplified.
+const MaxVolume = 150
+
 // Room is a saved live room.
 type Room struct {
 	ID   uint64 `toml:"id"`
@@ -110,7 +113,7 @@ func Load() (*Config, error) {
 
 func (c *Config) normalize() {
 	def := Default()
-	c.Volume = clamp(c.Volume, 0, 100)
+	c.Volume = clamp(c.Volume, 0, MaxVolume)
 	if c.CacheSeconds <= 0 {
 		c.CacheSeconds = def.CacheSeconds
 	}

@@ -284,6 +284,10 @@ func TestPlaysFromSecondAddressAndHoldsConnection(t *testing.T) {
 	if output.getVolume() != 1 {
 		t.Fatalf("volume %v", output.getVolume())
 	}
+	p.Configure(Options{CacheSeconds: 1, Volume: 150})
+	if output.getVolume() != 1 {
+		t.Fatalf("device must not amplify: volume %v", output.getVolume())
+	}
 	p.Configure(Options{CacheSeconds: 1, Volume: 100, Muted: true})
 	if output.getVolume() != 0 {
 		t.Fatal("mute was not applied")

@@ -41,6 +41,21 @@ func TestMissingKeysKeepDefaults(t *testing.T) {
 	}
 }
 
+func TestVolumeIsClampedToMax(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HEITING_CONFIG_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("volume = 999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Volume != MaxVolume {
+		t.Fatalf("volume %d", cfg.Volume)
+	}
+}
+
 func TestBrokenFileIsAnError(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HEITING_CONFIG_DIR", dir)

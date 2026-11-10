@@ -390,7 +390,7 @@ func (m *Model) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) changeVolume(delta int) tea.Cmd {
-	m.cfg.Volume = min(max(m.cfg.Volume+delta, 0), 100)
+	m.cfg.Volume = min(max(m.cfg.Volume+delta, 0), config.MaxVolume)
 	return m.applyAudio()
 }
 
