@@ -51,10 +51,10 @@ heiting https://live.bilibili.com/7777 # 按链接打开
 
 ## 文件位置
 
-| 文件 | macOS | Linux |
-| --- | --- | --- |
-| 配置和登录状态 | `~/Library/Application Support/heiting/` | `~/.config/heiting/` |
-| 日志和登录二维码 | `~/Library/Caches/heiting/` | `~/.cache/heiting/` |
+| 文件 | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| 配置和登录状态 | `~/Library/Application Support/heiting/` | `~/.config/heiting/` | `%AppData%\heiting\` |
+| 日志和登录二维码 | `~/Library/Caches/heiting/` | `~/.cache/heiting/` | `%LocalAppData%\heiting\` |
 
 
 ## 许可证
